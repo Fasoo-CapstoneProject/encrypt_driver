@@ -1,75 +1,89 @@
-﻿#include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 
-// Device type
-#define SIOCTL_TYPE 40000
+#pragma comment(lib, "Ws2_32.lib") // Winsock 라이브러리 링크
 
-// The IOCTL function codes from 0x800 to 0xFFF are for customer use.
-#define IOCTL_HELLO\
- CTL_CODE( SIOCTL_TYPE, 0x800, METHOD_BUFFERED, FILE_READ_DATA|FILE_WRITE_DATA)
+#define PORT 8080
+#define BUFFER_SIZE 1024
 
-void printBuffer(const char* buffer, DWORD size) {
-    printf("Buffer contents: ");
-    for (DWORD i = 0; i < size; i++) {
-        printf("%02X ", (unsigned char)buffer[i]);
+void handle_client(SOCKET client_socket) {
+    char buffer[BUFFER_SIZE];
+    int bytes_received = recv(client_socket, buffer, BUFFER_SIZE, 0);
+
+    if (bytes_received == SOCKET_ERROR) {
+        printf("Error receiving data: %d\n", WSAGetLastError());
+        closesocket(client_socket);
+        return;
     }
-    printf("\n");
+
+    buffer[bytes_received] = '\0';
+    printf("Received path: %s\n", buffer);
+
+    // 클라이언트에게 응답 전송
+    const char* response = "Path received successfully";
+    send(client_socket, response, strlen(response), 0);
+
+    closesocket(client_socket);
 }
 
-void decodeBuffer(char* buffer, DWORD size) {
-    const UCHAR xorKey = 0x5A;  // 드라이버와 동일한 XOR 키
-    for (DWORD i = 0; i < size; i++) {
-        buffer[i] ^= xorKey;
+int main() {
+    WSADATA wsaData;
+    SOCKET server_socket, client_socket;
+    struct sockaddr_in server_addr, client_addr;
+    int addr_len = sizeof(client_addr);
+
+    // Initialize Winsock
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        printf("WSAStartup failed: %d\n", WSAGetLastError());
+        return EXIT_FAILURE;
     }
-}
 
-int main(int argc, char* argv[])
-{
-	HANDLE hDevice;
-	DWORD dwBytesRead = 0;
-	char ReadBuffer[50] = { 0 };
+    // Create socket
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket == INVALID_SOCKET) {
+        printf("Socket creation failed: %d\n", WSAGetLastError());
+        WSACleanup();
+        return EXIT_FAILURE;
+    }
 
-	// 디바이스 열기
-	hDevice = CreateFile(L"\\\\.\\MyDevice", 
-		GENERIC_WRITE | GENERIC_READ, 
-		0, 
-		NULL, 
-		OPEN_EXISTING, 
-		FILE_ATTRIBUTE_NORMAL, 
-		NULL);
-	
-	if (hDevice == INVALID_HANDLE_VALUE) {
-		printf("Failed to open device. Error: %d\n", GetLastError());
-		return 1;
-	}
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
 
-	printf("Handle: %p\n", hDevice);
+    // Bind socket
+    if (bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
+        printf("Bind failed: %d\n", WSAGetLastError());
+        closesocket(server_socket);
+        WSACleanup();
+        return EXIT_FAILURE;
+    }
 
-	// IOCTL 호출하여 인코딩된 메시지 받기
-	if (!DeviceIoControl(hDevice, 
-		IOCTL_HELLO, 
-		NULL, 
-		0, 
-		ReadBuffer, 
-		sizeof(ReadBuffer), 
-		&dwBytesRead, 
-		NULL))
-	{
-		printf("DeviceIoControl failed. Error: %d\n", GetLastError());
-		CloseHandle(hDevice);
-		return 1;
-	}
+    // Listen for connections
+    if (listen(server_socket, 5) == SOCKET_ERROR) {
+        printf("Listen failed: %d\n", WSAGetLastError());
+        closesocket(server_socket);
+        WSACleanup();
+        return EXIT_FAILURE;
+    }
 
-	// 인코딩된 버퍼 출력
-	printf("Received encoded message (%d bytes):\n", dwBytesRead);
-	printBuffer(ReadBuffer, dwBytesRead);
+    printf("Server listening on port %d...\n", PORT);
 
-	// 버퍼 디코딩
-	decodeBuffer(ReadBuffer, dwBytesRead);
-	
-	// 디코딩된 메시지 출력
-	printf("Decoded message: %s\n", ReadBuffer);
+    // Accept client connections
+    while (1) {
+        client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
+        if (client_socket == INVALID_SOCKET) {
+            printf("Accept failed: %d\n", WSAGetLastError());
+            continue;
+        }
 
-	CloseHandle(hDevice);
-	return 0;
+        handle_client(client_socket);
+    }
+
+    // Cleanup
+    closesocket(server_socket);
+    WSACleanup();
+    return 0;
 }
